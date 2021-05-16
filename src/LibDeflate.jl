@@ -87,7 +87,7 @@ end
     elseif code == LIBDEFLATE_SHORT_INPUT
         "libdeflate 2: short input"
     elseif code == LIBDEFLATE_INSUFFICIENT_SPACE
-        "libdeflate 2: insufficient space"
+        "libdeflate 3: insufficient space"
     end
     throw(LibDeflateError(message))
 end
