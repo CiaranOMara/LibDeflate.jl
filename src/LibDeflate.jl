@@ -95,15 +95,26 @@ struct LibDeflateError <: Exception
     msg::String
 end
 
+function translate_return_code(code)
+
+    if code == LIBDEFLATE_BAD_DATA
+        return BAD_DATA
+    end
+
+    if code == LIBDEFLATE_SHORT_INPUT
+        return SHORT_INPUT
+    end
+
+    if code == LIBDEFLATE_INSUFFICIENT_SPACE
+        return INSUFFICIENT_SPACE
+    end
+
+    throw(LibDeflateError("Unknown code"))
+end
+
 @noinline function check_return_code(code)
     iszero(code) && return nothing
-    message = if code == LIBDEFLATE_BAD_DATA
-        BAD_DATA
-    elseif code == LIBDEFLATE_SHORT_INPUT
-        SHORT_INPUT
-    elseif code == LIBDEFLATE_INSUFFICIENT_SPACE
-        INSUFFICIENT_SPACE
-    end
+    message = translate_return_code(code)
     throw(LibDeflateError(message))
 end
 
