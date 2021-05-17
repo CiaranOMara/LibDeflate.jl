@@ -8,7 +8,7 @@ function next_zero(p::Ptr{UInt8}, i::UInt32, lastindex::UInt32)::UInt32
         i += UInt32(1)
         p += 1
     end
-    gzip_error(2)
+    throw(LibDeflateError(UNTERMINATED_NULL_STRING))
 end
 
 struct SizedMemory
@@ -58,7 +58,7 @@ remaining_bytes::UInt16
     while !iszero(remaining_bytes)
         field = parse_extra_field(ptr, index, remaining_bytes)
         push!(fields, field)
-        
+
         # We zero the range field on an empty subfield, so we take
         # that possibility into account
         field_len = field.data === nothing ? UInt16(0) : length(field.data) % UInt16
@@ -77,13 +77,13 @@ end
 
 # The pointer points to the first byte of the extra fields
 function parse_extra_field(ptr::Ptr{UInt8}, index::UInt32, remaining_bytes::UInt16)
-    remaining_bytes < 4 && gzip_error(7)
+    remaining_bytes < 4 && throw(LibDeflateError(EXTRA_DATA_TOO_LONG))
     s1 = unsafe_load(ptr)
     s2 = unsafe_load(ptr + 1)
-    iszero(s2) && gzip_error(8) # not allowed
+    iszero(s2) && throw(LibDeflateError(EXTRA_DATA_INVALID)) # not allowed
     field_len = ltoh(unsafe_load(Ptr{UInt16}(ptr + 2)))
-    field_len + 4 > remaining_bytes && gzip_error(7)
-    
+    field_len + 4 > remaining_bytes && throw(LibDeflateError(EXTRA_DATA_TOO_LONG))
+
     # If the field is empty, we use a Nothing to convey that
     range = if iszero(field_len)
         nothing
@@ -158,14 +158,14 @@ function unsafe_parse_gzip_header(
     extra_data::Union{Vector{GzipExtraField}, Nothing}=nothing
 )
     # header is at least 10 bytes
-    max_len > 9 || gzip_error(6)
+    max_len > 9 || throw(LibDeflateError(INPUT_DATA_TOO_SHORT))
     # Bytes 1 - 10. Check first four bytes, skip rest
     # +---+---+---+---+---+---+---+---+---+---+
     # |ID1|ID2|CM |FLG|     MTIME     |XFL|OS | (more-->)
     # +---+---+---+---+---+---+---+---+---+---+
     ptr = in_ptr - UInt(1) # zero-indexed pointer
     header = ltoh(unsafe_load(Ptr{UInt32}(ptr + 1)))
-    header & 0x00ffffff == 0x00088b1f || gzip_error(1)
+    header & 0x00ffffff == 0x00088b1f || throw(LibDeflateError(BAD_HEADER))
     FLAG_HCRC =    !iszero(header & 0x02000000)
     FLAG_EXTRA =   !iszero(header & 0x04000000)
     FLAG_NAME =    !iszero(header & 0x08000000)
@@ -189,7 +189,7 @@ function unsafe_parse_gzip_header(
         end
         extra = parse_fields!(extra_vector, ptr + index + 2, index + UInt32(2), extra_len)
         index += extra_len + UInt32(2)
-        index > max_len && gzip_error(2)
+        index > max_len && throw(LibDeflateError(UNTERMINATED_NULL_STRING))
     end
 
     filename = nothing
@@ -198,7 +198,7 @@ function unsafe_parse_gzip_header(
         # |...original file name, zero-terminated...| (more-->)
         # +=========================================+
         zero_pos = next_zero(ptr + index, index, max_len % UInt32)
-        zero_pos > max_len && gzip_error(2)
+        zero_pos > max_len && throw(LibDeflateError(UNTERMINATED_NULL_STRING))
         filename = index:zero_pos - one(UInt32)
         index = zero_pos + one(UInt32)
     end
@@ -207,7 +207,7 @@ function unsafe_parse_gzip_header(
     comment = nothing
     if FLAG_COMMENT
         zero_pos = next_zero(ptr + index, index, max_len % UInt32)
-        zero_pos > max_len && gzip_error(2)
+        zero_pos > max_len && throw(LibDeflateError(UNTERMINATED_NULL_STRING))
         comment = index:zero_pos - one(UInt32)
         index = zero_pos + one(UInt32)
     end
@@ -220,33 +220,12 @@ function unsafe_parse_gzip_header(
         # +---+---+
         crc_obs_16 = unsafe_crc32(ptr + one(UInt), index - one(UInt)) % UInt16
         crc_exp_16 = ltoh(unsafe_load(Ptr{UInt16}(ptr + index)))
-        crc_obs_16 == crc_exp_16 || gzip_error(3)
+        crc_obs_16 == crc_exp_16 || throw(LibDeflateError(HEADER_CRC16_CHECKSUM_DOES_NOT_MATCH))
         index += UInt32(2)
-        index > max_len && gzip_error(2)
+        index > max_len && throw(LibDeflateError(UNTERMINATED_NULL_STRING))
     end
 
     return (index - UInt32(1), GzipHeader(mtime, filename, comment, extra))
-end
-
-@noinline function gzip_error(code::Int)
-    message = if code == 1
-        "Bad header"
-    elseif code == 2
-        "Unterminated null string"
-    elseif code == 3
-        "Header CRC16 checksum does not match"
-    elseif code == 4
-        "Payload CRC132 checksum does not match"
-    elseif code == 5
-        "Output data too long"
-    elseif code == 6
-        "Input data too short"
-    elseif code == 7
-        "Extra data too long"
-    elseif code == 8
-        "Extra data invalid"
-    end
-    throw(LibDeflateError(message))
 end
 
 """
@@ -254,7 +233,7 @@ end
 
 Result of `LibDeflate`'s gzip decompression on byte vector. The fields `filename`
 and `comment` specify the location of gzip feature data in the input vector.
-When not applicable (e.g. the `comemnt` field is not applicable for gzip files 
+When not applicable (e.g. the `comemnt` field is not applicable for gzip files
 without the `FCOMMENT` flag), these fields are zeroed out.
 
 It has the following fields:
@@ -311,8 +290,8 @@ Return a `GzipDecompressResult`
 See also: [`gzip_decompress!`](@ref)
 """
 function unsafe_gzip_decompress!(
-    decompressor::Decompressor, 
-    out_data::Vector{UInt8}, 
+    decompressor::Decompressor,
+    out_data::Vector{UInt8},
     max_outlen::UInt,
     in_ptr::Ptr{UInt8},
     len::UInt,
@@ -324,15 +303,15 @@ function unsafe_gzip_decompress!(
     # First decompress header
     header_len, header = unsafe_parse_gzip_header(in_ptr, len - nonheader_min_len, extra_data)
 
-    
+
     # Skip to end to check crc32 and data len
     # +---+---+---+---+---+---+---+---+
     # |     CRC32     |     ISIZE     | END OF FILE
     # +---+---+---+---+---+---+---+---+
-    
+
     compressed_len = len - UInt(8) - header_len
     uncompressed_size = ltoh(unsafe_load(Ptr{UInt32}(in_ptr + len - UInt(4))))
-    uncompressed_size > max_outlen && gzip_error(5)
+    uncompressed_size > max_outlen && throw(LibDeflateError(OUTPUT_DATA_TOO_LONG))
     length(out_data) < uncompressed_size && resize!(out_data, uncompressed_size)
 
     # Now DEFLATE decompress
@@ -342,7 +321,7 @@ function unsafe_gzip_decompress!(
     # Check for CRC checksum and validate it
     crc_exp = ltoh(unsafe_load(Ptr{UInt32}(in_ptr + len - UInt(8))))
     crc_obs = unsafe_crc32(pointer(out_data), uncompressed_size % Int)
-    crc_exp == crc_obs || gzip_error(4)
+    crc_exp == crc_obs || throw(LibDeflateError(PAYLOAD_CRC132_CHECKSUM_DOES_NOT_MATCH))
 
     GzipDecompressResult(uncompressed_size, header)
 end
@@ -399,7 +378,7 @@ function gzip_compress!(
         extra === nothing ? UInt16(0) : sizeof(extra) % UInt16,
         header_crc
     )
-    # We add 8 extra bytes to make sure Libdeflate don't error due to off-by-one errors 
+    # We add 8 extra bytes to make sure Libdeflate don't error due to off-by-one errors
     resize!(output, maxlen + 8)
 
     GC.@preserve output input comment filename extra begin
@@ -457,7 +436,7 @@ function unsafe_gzip_compress!(
     filename::Union{SizedMemory, Nothing},
     extra::Union{SizedMemory, Nothing},
     header_crc::Bool,
-)    
+)
     # Check output len is long enough
     max_out_len(
         in_len,
@@ -467,27 +446,27 @@ function unsafe_gzip_compress!(
             UInt16(0)
         else
             # No more than typemax(UInt16) bytes for extra field
-            length(extra) > typemax(UInt16) && gzip_error(7)
+            length(extra) > typemax(UInt16) && throw(LibDeflateError(EXTRA_DATA_TOO_LONG))
             length(extra) % UInt16
         end,
         header_crc
-    ) > out_len && gzip_error(5)
+    ) > out_len && throw(LibDeflateError(OUTPUT_DATA_TOO_LONG))
 
     # Write first four bytes - magix number, compression type, flags
     header = 0x00088b1f
     if comment !== nothing
         # Check for absence of zero byte
-        any_zeros(comment) && gzip_error(2)
+        any_zeros(comment) && throw(LibDeflateError(UNTERMINATED_NULL_STRING))
         header |= 0x10000000
     end
     if filename !== nothing
         # Check for absence of zero byte
-        any_zeros(filename) && gzip_error(2)
+        any_zeros(filename) && throw(LibDeflateError(UNTERMINATED_NULL_STRING))
         header |= 0x08000000
     end
     if extra !== nothing
         # Validate extra data
-        is_valid_extra_data(pointer(extra), length(extra) % UInt16) || gzip_error(8)
+        is_valid_extra_data(pointer(extra), length(extra) % UInt16) || throw(LibDeflateError(EXTRA_DATA_INVALID))
         header |= 0x04000000
     end
     header = ifelse(header_crc, header | 0x02000000, header)
@@ -501,7 +480,7 @@ function unsafe_gzip_compress!(
     unsafe_store!(Ptr{UInt16}(ptr + 9), htol(0x00ff))
 
     index = UInt(11)
-    
+
     # Add in extra data
     if extra !== nothing
         unsafe_store!(Ptr{UInt16}(ptr + index), htol(length(extra) % UInt16))

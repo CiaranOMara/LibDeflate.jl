@@ -25,16 +25,16 @@ end
     test_parse(v) = LibDeflate.parse_fields(pointer(v), UInt32(1), UInt16(length(v)))
     for data in data_test_cases
         # We merely test it doesn't fail
-        @test test_parse(data) !== nothing 
+        @test test_parse(data) !== nothing
         data[2] = 0x00
-        @test_throws LibDeflateError test_parse(data)
+        @test_throws LibDeflateError(LibDeflate.EXTRA_DATA_INVALID) test_parse(data)
         data[2] = 0xa0
         push!(data, 0x00)
-        @test_throws LibDeflateError test_parse(data)
+        @test_throws LibDeflateError(LibDeflate.EXTRA_DATA_TOO_LONG) test_parse(data)
         pop!(data)
-        @test_throws LibDeflateError test_parse(data[1:end-1])
+        @test_throws LibDeflateError(LibDeflate.EXTRA_DATA_TOO_LONG) test_parse(data[1:end-1]) #TODO: error message for short extra.
         data = empty!(copy(data))
-        @test test_parse(data) !== nothing 
+        @test test_parse(data) !== nothing
     end
 end
 

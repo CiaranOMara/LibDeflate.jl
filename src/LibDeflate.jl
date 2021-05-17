@@ -2,6 +2,17 @@ module LibDeflate
 
 using libdeflate_jll
 
+# Error message strings.
+const BAD_HEADER = "Bad header"
+const UNTERMINATED_NULL_STRING = "Unterminated null string"
+const HEADER_CRC16_CHECKSUM_DOES_NOT_MATCH = "Header CRC16 checksum does not match"
+const PAYLOAD_CRC132_CHECKSUM_DOES_NOT_MATCH = "Payload CRC132 checksum does not match"
+const OUTPUT_DATA_TOO_LONG = "Output data too long"
+const INPUT_DATA_TOO_SHORT = "Input data too short"
+const EXTRA_DATA_TOO_LONG = "Extra data too long"
+const EXTRA_DATA_INVALID = "Extra data invalid"
+const OUTPUT_BUFFER_TOO_SMALL = "Output buffer too small"
+
 # Must be mutable for the GC to be able to interact with it
 """
     Decompressor()
@@ -21,14 +32,14 @@ end
 Base.unsafe_convert(::Type{Ptr{Nothing}}, x::Decompressor) = x.ptr
 
 function Decompressor()
-    decompressor = Decompressor(0, ccall((:libdeflate_alloc_decompressor, 
+    decompressor = Decompressor(0, ccall((:libdeflate_alloc_decompressor,
                    libdeflate), Ptr{Nothing}, ()))
     finalizer(free_decompressor, decompressor)
     return decompressor
 end
 
 function free_decompressor(decompressor::Decompressor)
-    ccall((:libdeflate_free_decompressor, libdeflate), 
+    ccall((:libdeflate_free_decompressor, libdeflate),
            Nothing, (Ptr{Nothing},), decompressor)
     return nothing
 end
@@ -71,6 +82,10 @@ const LIBDEFLATE_BAD_DATA           = Cint(1)
 const LIBDEFLATE_SHORT_INPUT        = Cint(2)
 const LIBDEFLATE_INSUFFICIENT_SPACE = Cint(3)
 
+const BAD_DATA = "libdeflate 1: bad data"
+const SHORT_INPUT = "libdeflate 2: short input"
+const INSUFFICIENT_SPACE = "libdeflate 3: insufficient space"
+
 """
     LibDeflateError(message::String)
 
@@ -83,11 +98,11 @@ end
 @noinline function check_return_code(code)
     iszero(code) && return nothing
     message = if code == LIBDEFLATE_BAD_DATA
-        "libdeflate 1: bad data"
+        BAD_DATA
     elseif code == LIBDEFLATE_SHORT_INPUT
-        "libdeflate 2: short input"
+        SHORT_INPUT
     elseif code == LIBDEFLATE_INSUFFICIENT_SPACE
-        "libdeflate 3: insufficient space"
+        INSUFFICIENT_SPACE
     end
     throw(LibDeflateError(message))
 end
@@ -182,7 +197,7 @@ function unsafe_compress!(compressor::Compressor, outptr::Ptr{UInt8}, n_out::Int
             compressor, inptr, n_in, outptr, n_out)
 
     if iszero(bytes)
-        throw(LibDeflateError("Output buffer too small"))
+        throw(LibDeflateError(OUTPUT_BUFFER_TOO_SMALL))
     end
     return bytes % Int
 end
